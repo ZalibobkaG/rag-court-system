@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>RAG по судебным документам</title>
+<style>
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 24px; max-width: 1400px; }
+  textarea { width: 100%; height: 60px; }
+  button { margin: 6px 6px 6px 0; padding: 6px 12px; }
+  pre { background: #f4f4f4; padding: 8px; white-space: pre-wrap; }
+  table { border-collapse: collapse; width: 100%; margin-top: 8px; }
+  th, td { border: 1px solid #ddd; padding: 4px 6px; vertical-align: top; text-align: left; }
+  tr.top { background: #fff8d6; }
+  tr.cited { background: #d8f5d0; }
+  tr.rest { color: #888; }
+  td.text { max-width: 700px; }
+</style>
+</head>
+<body>
+<h2>RAG по судебным документам</h2>
+
+<label>Стратегия чанкинга: <select id="strategy"></select></label>
+<button onclick="indexDocs()">Индексировать папку</button>
+<pre id="indexResult">—</pre>
+
+<textarea id="question" placeholder="Вопрос по делу"></textarea>
+<button onclick="ask()">Спросить</button>
+<button onclick="loadStats()">Обновить статистику</button>
+<pre id="stats">—</pre>
+
+<h3>Ответ</h3>
+<pre id="answer">—</pre>
+<pre id="usage">—</pre>
+
+<h3>Чанки</h3>
+<p>Зелёные — процитированы в ответе, жёлтые — в топе, серые — кандидаты, не прошедшие в топ.</p>
+<table>
+  <thead><tr><th>Топ №</th><th>В ответе</th><th>Вектор ранг</th><th>Дистанция</th><th>BM25 ранг</th><th>RRF</th><th>Файл</th><th>Стр.</th><th>Текст</th></tr></thead>
+  <tbody id="chunks"></tbody>
+</table>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+async function api(path, body) {
+  const response = await fetch("/api" + path, body ? {
+    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body),
+  } : {});
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.detail ?? response.statusText);
+  return data;
+}
+
+async function run(target, action) {
+  $(target).textContent = "…";
+  try { await action(); } catch (error) { $(target).textContent = "Ошибка: " + error.message; }
+}
+
+function indexDocs() {
+  run("indexResult", async () => {
+    const r = await api("/index", {strategy: $("strategy").value});
+    $("indexResult").textContent = `Файлов: ${r.files}, чанков: ${r.chunks}, время, мс: ${JSON.stringify(r.timings_ms)}`;
+  });
+}
+
+function ask() {
+  run("answer", async () => {
+    const r = await api("/ask", {question: $("question").value, strategy: $("strategy").value});
+    const u = r.usage;
+    $("answer").textContent = r.answer;
+    $("usage").textContent = `${u.model}: вход ${u.input_tokens} (из кэша ${u.cached_tokens}), выход ${u.output_tokens}, ` +
+      `$${u.cost_usd}\nВремя, мс: ${JSON.stringify(r.timings_ms)}`;
+    renderChunks(r.candidates);
+    loadStats();
+  });
+}
+
+function renderChunks(candidates) {
+  $("chunks").replaceChildren(...candidates.map((c) => {
+    const row = document.createElement("tr");
+    row.className = c.cited ? "cited" : c.top_rank ? "top" : "rest";
+    const cells = [c.top_rank, c.cited ? "да" : "", c.vector_rank, c.vector_distance, c.bm25_rank,
+                   c.rrf_score.toFixed(4), c.source, c.page, c.text];
+    for (const value of cells) {
+      const cell = row.insertCell();
+      cell.textContent = value ?? "";
+    }
+    row.lastChild.className = "text";
+    return row;
+  }));
+}
+
+function loadStats() {
+  run("stats", async () => {
+    const s = await api("/stats");
+    $("stats").textContent = `Всего вопросов: ${s.queries}, токены вход/выход: ${s.input_tokens}/${s.output_tokens}, ` +
+      `потрачено: $${s.cost_usd.toFixed(6)}, среднее время ответа: ${Math.round(s.avg_duration_ms)} мс`;
+  });
+}
+
+api("/strategies").then((names) => {
+  $("strategy").replaceChildren(...names.map((name) => new Option(name, name)));
+});
+loadStats();
+</script>
+</body>
+</html>

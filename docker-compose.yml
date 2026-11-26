@@ -1,0 +1,34 @@
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: rag
+      POSTGRES_PASSWORD: rag
+      POSTGRES_DB: rag
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag"]
+      interval: 2s
+      retries: 30
+
+  app:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+asyncpg://rag:rag@db:5432/rag
+      DEEPSEEK_API_KEY: ${ai_key}
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - type: bind
+        source: ${DOCS_HOST_DIR:-./data}
+        target: /data
+        read_only: true
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+      - ./logs:/srv/logs
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
